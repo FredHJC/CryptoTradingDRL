@@ -165,7 +165,7 @@ class DRLEnsembleAgent:
         for i in range(1, num_chunk):
             cur_sharpe_ratio = [sharpe_ratio(a[i - 1], base_chunks[i - 1]) for a in agent_chunks]
             best_agent = np.argmax(cur_sharpe_ratio)
-            best_trade = agent_returns_chuncks[best_agent][i]
+            best_trade = agent_returns_chunks[best_agent][i]
             ensemble_total_assets += best_trade
 
         return ensemble_total_assets
