@@ -1,4 +1,5 @@
 # CryptoTradingDRL
+This is the repo for our Deep Learning Final Project. It is designed to 
 
 This repo contains the main modules developed for our project. However, there are also many modifications in three other repos to fit our demand. \
 https://github.com/FredHJC/ElegantRL.git \
