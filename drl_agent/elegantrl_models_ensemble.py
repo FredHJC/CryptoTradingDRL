@@ -141,7 +141,7 @@ class DRLEnsembleAgent:
         for model_name, cwd in zip(model_list, cwd_list):
             if model_name not in MODELS:
                 raise NotImplementedError("NotImplementedError")
-            agent_total_assets.append(DRL_prediction(model_name, cwd, net_dimension, environment))
+            agent_total_assets.append(DRLEnsembleAgent.DRL_prediction(model_name, cwd, net_dimension, environment))
 
         def asset_to_return(arr):
             returns = list()
