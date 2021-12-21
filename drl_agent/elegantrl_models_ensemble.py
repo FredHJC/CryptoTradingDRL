@@ -61,13 +61,6 @@ class DRLEnsembleAgent:
         model.break_step = total_timesteps
         train_and_evaluate(args=model)
 
-    def sharpe_ratio(self, agent_returns, base_returns):
-        excess_returns = agent_returns - base_returns
-        avg_excess_return = np.avg(excess_returns)
-        sharpe_ratio = avg_excess_return/np.std(agent_returns)
-
-        return sharpe_ratio
-
     @staticmethod
     def DRL_prediction(model_name, cwd, net_dimension, environment):
         if model_name not in MODELS:
@@ -132,90 +125,131 @@ class DRLEnsembleAgent:
 
     @staticmethod
     def DRL_prediction_ensemble(model_list, cwd_list, net_dimension, environment, base_returns):
-        models_dict = {}
 
-        for model_name in model_list:
+        def sharpe_ratio(agent_returns, base_returns):
+            agent_returns = np.array(agent_returns).flatten()
+            step = len(agent_returns)
+            base_returns = np.array(base_returns)[:step].flatten()
+            excess_returns = agent_returns - base_returns
+            avg_excess_return = np.mean(excess_returns, axis=0)
+            sharpe_ratio = avg_excess_return / np.std(agent_returns)
+
+            return sharpe_ratio
+
+        agent_total_assets = list()
+
+        for model_name, cwd in zip(model_list, cwd_list):
             if model_name not in MODELS:
                 raise NotImplementedError("NotImplementedError")
-            models_dict[model_name] = MODELS[model_name]()
+            agent_total_assets.append(DRL_prediction(model_name, cwd, net_dimension, environment))
 
-        environment.env_num = 1
-        args_list = []
-        for model_name, model in models_dict.items():
-            args = Arguments(env=environment, agent=model)
-            if model_name in OFF_POLICY_MODELS:
-                args.if_off_policy = True
-            else:
-                args.if_off_policy = False
-            args.agent = model
-            args.env = environment
-            args_list.append(args)
+        def asset_to_return(arr):
+            returns = list()
+            n = len(arr)
+            for i in range(1, n):
+                returns.append((arr[i] - arr[i - 1]) / arr[i - 1])
+            return returns
 
-        # load agent
-        agent_list = []
-        for i, args in enumerate(args_list):
-            try:
-                state_dim = environment.state_dim
-                action_dim = environment.action_dim
+        agent_returns = [asset_to_return(arr) for arr in agent_total_assets]
 
-                agent = args.agent
-                net_dim = net_dimension
+        def chunks(l, n):
+            return [l[i:i + n] for i in range(0, len(l), n)]
 
-                agent.init(net_dim, state_dim, action_dim)
-                agent.save_or_load_agent(cwd=cwd_list[i], if_save=False)
-                act = agent.act
-                device = agent.device
+        agent_chunks = [chunks(l, 200) for l in agent_returns]
+        agent_returns_chunks = [chunks(l, 200) for l in agent_total_assets]
+        base_chunks = chunks(base_returns[:-1], 200)
 
-                agent_list.append((agent, act, device))
+        num_chunk = len(agent_chunks[0])
 
-            except BaseException:
-                raise ValueError("Fail to load agent!")
+        ensemble_total_assets = agent_returns_chunks[1][0]
+        for i in range(1, num_chunk):
+            cur_sharpe_ratio = [sharpe_ratio(a[i - 1], base_chunks[i - 1]) for a in agent_chunks]
+            best_agent = np.argmax(cur_sharpe_ratio)
+            best_trade = agent_returns_chuncks[best_agent][i]
+            ensemble_total_assets += best_trade
 
-        # test on the testing env
-        _torch = torch
-        state = environment.reset()
-        episode_returns = list()  # the cumulative_return / initial_account
-        episode_total_assets = list()
-        episode_total_assets.append(environment.initial_total_asset)
+        return ensemble_total_assets
 
-        total_assets_agents = [[environment.initial_total_asset] for _ in range(len(agent_list))]
-        episode_returns_agents = [[] for _ in range(len(agent_list))]
+        # environment.env_num = 1
+        # args_list = []
+        # for model_name, model in models_dict.items():
+        #     args = Arguments(env=environment, agent=model)
+        #     if model_name in OFF_POLICY_MODELS:
+        #         args.if_off_policy = True
+        #     else:
+        #         args.if_off_policy = False
+        #     args.agent = model
+        #     args.env = environment
+        #     args_list.append(args)
 
-        daily_return_agents = [[] for _ in range(len(agent_list))]
+        # # load agent
+        # agent_list = []
+        # for i, args in enumerate(args_list):
+        #     try:
+        #         state_dim = environment.state_dim
+        #         action_dim = environment.action_dim
 
-        sharpe_ratio_agents = [[] for _ in range(len(agent_list))]
+        #         agent = args.agent
+        #         net_dim = net_dimension
 
-        with _torch.no_grad():
-            for i in range(environment.max_step):
-                action_list = []
-                for j, agent in enumerate(agent_list):
-                    s_tensor = _torch.as_tensor((state,), device=agent[2])
-                    a_tensor = agent[1](s_tensor)  # action_tanh = act.forward()
-                    action = (
-                        a_tensor.detach().cpu().numpy()[0]
-                    )  # not need detach(), because with torch.no_grad() outside
+        #         agent.init(net_dim, state_dim, action_dim)
+        #         agent.save_or_load_agent(cwd=cwd_list[i], if_save=False)
+        #         act = agent.act
+        #         device = agent.device
 
-                    state, reward, done, _ = environment.step(action)
+        #         agent_list.append((agent, act, device))
 
-                    total_asset = (
-                            environment.cash
-                            + (
-                                    environment.price_array[environment.time] * environment.stocks
-                            ).sum()
-                    )
-                    total_assets_agents[j].append(total_asset)
-                    episode_return = total_asset / environment.initial_total_asset
-                    episode_returns_agents[j].append(episode_return)
-                    daily_return_agents[j].append((total_asset-total_assets_agents[j-2])/total_asset-total_assets_agents[j-2])
-                    sharpe_ratio_agents[j].append(sharpe_ratio(daily_return_agents[j], base_returns))
-                episode_sr = np.array([sharpe_ratio_agents[_][-1] for _ in range(len(agent_list))])
-                episode_asset = total_assets_agents[np.argmax(episode_sr)][-1]
-                episode_total_assets.append(episode_asset)
-                episode_return = episode_asset / environment.initial_total_asset
-                episode_returns.append(episode_return)
-                if done:
-                    break
-        print("Test Finished!")
-        # return episode total_assets on testing data
-        print("episode_return", episode_return)
-        return episode_total_assets
+        #     except BaseException:
+        #         raise ValueError("Fail to load agent!")
+
+        # # test on the testing env
+        # _torch = torch
+        # state = environment.reset()
+        # episode_returns = list()  # the cumulative_return / initial_account
+        # episode_total_assets = list()
+        # episode_total_assets.append(environment.initial_total_asset)
+
+        # total_assets_agents = [[environment.initial_total_asset] for _ in range(len(agent_list))]
+        # episode_returns_agents = [[] for _ in range(len(agent_list))]
+
+        # daily_return_agents = [[] for _ in range(len(agent_list))]
+
+        # sharpe_ratio_agents = [[] for _ in range(len(agent_list))]
+
+        # with _torch.no_grad():
+        #     for i in range(environment.max_step):
+        #         action_list = []
+        #         for j, agent in enumerate(agent_list):
+        #             s_tensor = _torch.as_tensor((state,), device=agent[2])
+        #             a_tensor = agent[1](s_tensor)  # action_tanh = act.forward()
+        #             action = (
+        #                 a_tensor.detach().cpu().numpy()[0]
+        #             )  # not need detach(), because with torch.no_grad() outside
+
+        #             state, reward, done, _ = environment.step(action)
+
+        #             total_asset = (
+        #                     environment.cash
+        #                     + (
+        #                             environment.price_array[environment.time] * environment.stocks
+        #                     ).sum()
+        #             )
+        #             print(type(total_asset))
+        #             print(total_asset.shape)
+        #             total_assets_agents[j].append(total_asset)
+        #             episode_return = total_asset / environment.initial_total_asset
+        #             episode_returns_agents[j].append(episode_return)
+
+        #             daily_return_agents[j].append((total_asset-total_assets_agents[j-2])/total_asset-total_assets_agents[j-2])
+        #             sharpe_ratio_agents[j].append(sharpe_ratio(daily_return_agents[j], base_returns))
+        #         episode_sr = np.array([sharpe_ratio_agents[_][-1] for _ in range(len(agent_list))])
+        #         episode_asset = total_assets_agents[np.argmax(episode_sr)][-1]
+        #         episode_total_assets.append(episode_asset)
+        #         episode_return = episode_asset / environment.initial_total_asset
+        #         episode_returns.append(episode_return)
+        #         if done:
+        #             break
+        # print("Test Finished!")
+        # # return episode total_assets on testing data
+        # print("episode_return", episode_return)
+        # return episode_total_assets
