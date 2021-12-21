@@ -69,7 +69,69 @@ class DRLEnsembleAgent:
         return sharpe_ratio
 
     @staticmethod
-    def DRL_prediction(model_list, cwd_list, net_dimension, environment, base_returns):
+    def DRL_prediction(model_name, cwd, net_dimension, environment):
+        if model_name not in MODELS:
+            raise NotImplementedError("NotImplementedError")
+        model = MODELS[model_name]()
+        environment.env_num = 1
+        args = Arguments(env=environment, agent=model)
+        if model_name in OFF_POLICY_MODELS:
+            args.if_off_policy = True
+        else:
+            args.if_off_policy = False
+        args.agent = model
+        args.env = environment
+        #args.agent.if_use_cri_target = True  ##Not needed for test
+
+        # load agent
+        try:
+            state_dim = environment.state_dim
+            action_dim = environment.action_dim
+
+            agent = args.agent
+            net_dim = net_dimension
+
+            agent.init(net_dim, state_dim, action_dim)
+            agent.save_or_load_agent(cwd=cwd, if_save=False)
+            act = agent.act
+            device = agent.device
+
+        except BaseException:
+            raise ValueError("Fail to load agent!")
+
+        # test on the testing env
+        _torch = torch
+        state = environment.reset()
+        episode_returns = list()  # the cumulative_return / initial_account
+        episode_total_assets = list()
+        episode_total_assets.append(environment.initial_total_asset)
+        with _torch.no_grad():
+            for i in range(environment.max_step):
+                s_tensor = _torch.as_tensor((state,), device=device)
+                a_tensor = act(s_tensor)  # action_tanh = act.forward()
+                action = (
+                    a_tensor.detach().cpu().numpy()[0]
+                )  # not need detach(), because with torch.no_grad() outside
+                state, reward, done, _ = environment.step(action)
+
+                total_asset = (
+                    environment.cash
+                    + (
+                        environment.price_array[environment.time] * environment.stocks
+                    ).sum()
+                )
+                episode_total_assets.append(total_asset)
+                episode_return = total_asset / environment.initial_total_asset
+                episode_returns.append(episode_return)
+                if done:
+                    break
+        print("Test Finished!")
+        # return episode total_assets on testing data
+        print("episode_return", episode_return)
+        return episode_total_assets
+
+    @staticmethod
+    def DRL_prediction_ensemble(model_list, cwd_list, net_dimension, environment, base_returns):
         models_dict = {}
 
         for model_name in model_list:
