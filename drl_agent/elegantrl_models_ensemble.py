@@ -125,6 +125,7 @@ class DRLEnsembleAgent:
 
     @staticmethod
     def DRL_prediction_ensemble(model_list, cwd_list, net_dimension, environment, base_returns):
+        # Please note the current code is a simulation for testing. Actual prediction should be activated with codes commented out.
 
         def sharpe_ratio(agent_returns, base_returns):
             agent_returns = np.array(agent_returns).flatten()
